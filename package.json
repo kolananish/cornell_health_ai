@@ -6,6 +6,7 @@
     "dev": "rm -rf .next && NEXT_DISABLE_WEBPACK_CACHE=1 concurrently -n NEXT,ML -c blue,magenta \"next dev -H 127.0.0.1 -p 3000\" \"npm run dev:ml\"",
     "dev:ml": "bash ./ml-service/run-dev.sh",
     "setup:ml": "python3.12 -m venv ml-service/.venv && ml-service/.venv/bin/pip install -r ml-service/requirements.txt && ml-service/.venv/bin/python ml-service/resolve_runtime.py --pip-bin ml-service/.venv/bin/pip --root-dir . --model-path deliverables/psych_screener_v3.joblib",
+    "eval:thresholds": "ml-service/.venv/bin/python ml-service/evaluate_thresholds.py",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
@@ -14,7 +15,7 @@
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.460.0",
-    "next": "14.2.20",
+    "next": "^14.2.35",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "tailwind-merge": "^2.5.4",
