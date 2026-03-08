@@ -1,0 +1,209 @@
+================================================================================
+                   TELADOC EXPRESS - DEPLOYMENT REFERENCE
+================================================================================
+
+PROJECT STRUCTURE:
+  Frontend     : Next.js 14 + React 18 + TypeScript
+  Backend      : Python FastAPI + TabPFN ML Model (50MB joblib)
+  Deployment   : Vercel (frontend) + Railway (ML service)
+  No Code Changes Required - Same codebase, just deployed
+
+================================================================================
+                            QUICK DEPLOYMENT
+================================================================================
+
+STEP 1: Deploy ML Service (Railway)
+  URL: https://railway.app
+  Action: New Project → Deploy from GitHub → kolananish/cornell_health_ai
+  Wait: 5-10 minutes
+  Result: Get public URL (e.g., https://teladoc-ml-service-prod.railway.app)
+
+STEP 2: Deploy Frontend (Vercel)
+  URL: https://vercel.com
+  Action: Add New → Project → Import repo → kolananish/cornell_health_ai
+  Wait: 2-3 minutes
+  Result: Get project URL (e.g., https://teladoc-express.vercel.app)
+
+STEP 3: Connect Services (Vercel Dashboard)
+  Action: Settings → Environment Variables → Add:
+          Name: ML_SERVICE_URL
+          Value: (Railway URL from Step 1)
+          Scope: Production
+  Click: Save → Redeploy
+
+TOTAL TIME: ~15 minutes
+
+================================================================================
+                          ENVIRONMENT VARIABLES
+================================================================================
+
+VERCEL (Frontend):
+  ML_SERVICE_URL          = https://teladoc-ml-service-prod.railway.app
+  ML_SERVICE_TIMEOUT_MS   = 120000 (optional)
+
+RAILWAY (Backend):
+  TABPFN_DISABLE_TELEMETRY = 1
+  ML_TABPFN_CANDIDATES     = 6.4.1,6.3.2,2.2.1
+
+================================================================================
+                         SERVICE HEALTH CHECKS
+================================================================================
+
+Railway ML Service:
+  Endpoint: GET https://teladoc-ml-service-prod.railway.app/healthz
+  Expected: { "status": "ready", "model_name": "...", "thresholds": {...} }
+  Status Code: 200
+
+Vercel Frontend:
+  Open: https://teladoc-express.vercel.app
+  Expected: Medical history form loads, no console errors
+  Check: Browser DevTools → Console tab
+
+API Proxy:
+  In browser console:
+  fetch('https://teladoc-express.vercel.app/api/model/healthz')
+    .then(r => r.json()).then(console.log)
+  Expected: Same as Railway healthz response above
+
+================================================================================
+                           TESTING SEQUENCE
+================================================================================
+
+1. Frontend Loads
+   → Open https://teladoc-express.vercel.app
+   → Should see medical history intake form
+
+2. Model Health
+   → Browser console: fetch('/api/model/healthz').then(r => r.json()).then(console.log)
+   → Should return: { status: "ready", ... }
+
+3. Form Navigation
+   → Fill medical history form
+   → Click next → Should reach voice recording page
+
+4. Voice Recording
+   → Click "Start Recording" button
+   → Grant microphone permission
+   → Record or upload test audio
+
+5. Model Inference
+   → Submit voice recording form
+   → Wait 30-60 seconds (first time slower)
+   → Should return risk assessment results
+
+6. Results Display
+   → See risk level, voice indicators, suggested actions
+   → No errors in console
+
+================================================================================
+                              TROUBLESHOOTING
+================================================================================
+
+Problem: "ML service returned 503"
+Solution: Railway is loading model. Wait 1-2 minutes. Check Railway logs.
+
+Problem: "Cannot connect to ML service" / CORS error
+Solution: Verify ML_SERVICE_URL is HTTPS and public. Redeploy Vercel.
+
+Problem: "Request timeout" on voice submission
+Solution: Increase ML_SERVICE_TIMEOUT_MS to 120000-180000 in Vercel.
+
+Problem: Railway build fails with "tabpfn" error
+Solution: Check Railway build logs. Set ML_TABPFN_CANDIDATES=6.4.1,6.3.2
+
+Problem: 502 Bad Gateway from Vercel
+Solution: ML service is down. Check Railway deployment is "Active".
+
+Problem: Frontend loads but form won't submit
+Solution: Check browser console for errors. Verify ML_SERVICE_URL is correct.
+
+================================================================================
+                           PLATFORM LIMITS
+================================================================================
+
+VERCEL (Free Tier):
+  - Bandwidth: 100 GB/month
+  - Build time: No limit
+  - Deployments: Unlimited
+  - Functions: Unlimited
+  - SSL/TLS: Included
+
+RAILWAY (Free Tier):
+  - Credits: $5/month (usually sufficient for testing)
+  - Storage: Limited to available credits
+  - Memory: ~512MB per container
+  - Auto-scaling: Available
+  - SSL/TLS: Included
+
+================================================================================
+                        IMPORTANT FILES
+================================================================================
+
+vercel.json              - Vercel deployment configuration
+Procfile                 - Railway service startup configuration
+QUICK_START_DEPLOYMENT.md - 5-minute quick reference (READ THIS FIRST)
+DEPLOYMENT_GUIDE.md      - Detailed step-by-step guide
+DEPLOYMENT_READY.md      - Overview of what's prepared
+DEPLOYMENT_REFERENCE.txt - This file (quick reference card)
+
+================================================================================
+                          USEFUL LINKS
+================================================================================
+
+Vercel Dashboard:      https://vercel.com/dashboard
+Railway Dashboard:     https://railway.app/dashboard
+GitHub Repository:     https://github.com/kolananish/cornell_health_ai
+
+Project Documentation:
+  - README.md          - Project overview
+  - ml-service/README.md - ML service details
+  - DEPLOYMENT_GUIDE.md  - Full deployment documentation
+
+================================================================================
+                            ROLLBACK PLAN
+================================================================================
+
+If Vercel deployment breaks:
+  1. Vercel Dashboard → Deployments
+  2. Click previous successful deployment (green checkmark)
+  3. Click "Promote to Production"
+  4. Instant rollback
+
+If Railway deployment breaks:
+  1. Railway Dashboard → Deployments
+  2. Select previous successful deployment
+  3. Click "Redeploy"
+  4. Wait for rebuild (~5 minutes)
+
+No data loss - both services are stateless.
+
+================================================================================
+                         NEXT STEPS (USER ACTION)
+================================================================================
+
+1. Read: QUICK_START_DEPLOYMENT.md
+2. Deploy ML service to Railway (5-10 min)
+3. Deploy frontend to Vercel (2-3 min)
+4. Set ML_SERVICE_URL env var in Vercel (1 min)
+5. Test using "TESTING SEQUENCE" above
+6. Monitor logs in both dashboards
+7. (Optional) Set up custom domain in Vercel
+
+Total time to production: ~15 minutes
+
+================================================================================
+                              SUPPORT
+================================================================================
+
+Documentation:
+  - DEPLOYMENT_GUIDE.md → Full guide with troubleshooting
+  - QUICK_START_DEPLOYMENT.md → Quick reference
+  - ml-service/README.md → ML service specifics
+
+External Resources:
+  - Vercel Docs: https://vercel.com/docs
+  - Railway Docs: https://docs.railway.app
+  - FastAPI Docs: https://fastapi.tiangolo.com
+  - Next.js Docs: https://nextjs.org/docs
+
+================================================================================
