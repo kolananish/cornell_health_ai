@@ -1,0 +1,17 @@
+{
+  "projectName": "teladoc-express",
+  "buildCommand": "npm run build",
+  "framework": "nextjs",
+  "regions": ["iad1"],
+  "env": {
+    "ML_SERVICE_URL": {
+      "description": "Base URL of the deployed Python ML service on Railway",
+      "required": true
+    },
+    "ML_SERVICE_TIMEOUT_MS": {
+      "description": "Timeout for ML service requests in milliseconds",
+      "default": "120000",
+      "required": false
+    }
+  }
+}
