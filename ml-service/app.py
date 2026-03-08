@@ -11,10 +11,136 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from feature_extractor import extract_features, load_audio_for_analysis, median_aggregate_features
 from model_loader import LoadedModel, load_model, predict_probability, top_voice_indicators
 from risk_policy import derive_risk_level, select_threshold, suggested_action_for_risk
-from schemas import AnalyzeResponse, InferenceMetadata, ScreeningResult
+from schemas import AnalyzeResponse, InferenceMetadata, NonTechnicalSummary, ScreeningResult
 
 app = FastAPI(title="VocalHealth AI v3 Model Service", version="1.0.0")
 model: LoadedModel | None = None
+
+
+def _risk_plain_label(risk_level: str) -> str:
+    if risk_level == "high":
+        return "High concern"
+    if risk_level == "medium":
+        return "Moderate concern"
+    return "Low concern"
+
+
+def _coverage_band(computed: int, total: int) -> str:
+    if total <= 0:
+        return "Unknown"
+    ratio = computed / total
+    if ratio >= 0.95:
+        return "Excellent"
+    if ratio >= 0.85:
+        return "Good"
+    if ratio >= 0.7:
+        return "Fair"
+    return "Limited"
+
+
+def _duration_quality(min_duration_seconds: float) -> str:
+    if min_duration_seconds >= 20:
+        return "Good length"
+    if min_duration_seconds >= 10:
+        return "Somewhat short"
+    return "Very short"
+
+
+def _friendly_feature_name(feature: str) -> str:
+    names = {
+        "cepstral_peak_prominence_mean": "voice clarity pattern",
+        "cepstral_peak_prominence_std": "voice consistency pattern",
+        "loudness_sma3_amean": "average speaking loudness",
+        "loudness_sma3_pctlrange0-2": "loudness variability",
+        "mfcc1_sma3_amean": "voice tone profile",
+        "mfcc2_sma3_amean": "voice tone profile (secondary)",
+        "speaking_rate": "speaking pace",
+        "mean_hnr_db": "voice harmonic quality",
+        "spectral_tilt": "voice spectral balance",
+    }
+    return names.get(feature, feature.replace("_", " "))
+
+
+def _print_non_technical_summary(
+    request_id: str,
+    summary: NonTechnicalSummary,
+) -> None:
+    print("[ML-SERVICE] --------------- Non-Technical Summary ---------------")
+    print(f"[ML-SERVICE] summary_id={request_id}")
+    print(f"[ML-SERVICE] overall_result={summary.overall_result} ({summary.risk_level.upper()})")
+    print(
+        f"[ML-SERVICE] score={summary.score_percent:.1f}% vs alert level {summary.alert_level_percent:.1f}% "
+        f"(mode={summary.threshold_mode})"
+    )
+    print(
+        f"[ML-SERVICE] recording_length: rainbow={summary.rainbow_duration_seconds:.1f}s, "
+        f"free_speech={summary.free_speech_duration_seconds:.1f}s -> {summary.recording_length_quality}"
+    )
+    print(
+        f"[ML-SERVICE] data_quality: {summary.usable_signals_computed}/{summary.usable_signals_total} "
+        f"voice signals usable ({summary.data_quality_percent:.1f}%) -> {summary.data_quality_band}"
+    )
+
+    if summary.notable_voice_patterns:
+        print("[ML-SERVICE] notable_voice_patterns:")
+        for item in summary.notable_voice_patterns:
+            print(f"[ML-SERVICE]   - {item.label}: {item.direction}")
+
+    if summary.caveats:
+        print("[ML-SERVICE] caveats_for_interpretation:")
+        for note in summary.caveats:
+            print(f"[ML-SERVICE]   - {note}")
+    else:
+        print("[ML-SERVICE] caveats_for_interpretation: none")
+
+    print("[ML-SERVICE] -------------------------------------------------------")
+
+
+def _build_non_technical_summary(
+    *,
+    risk_level: str,
+    probability: float,
+    threshold: float,
+    threshold_mode: str,
+    rainbow_duration_seconds: float,
+    free_speech_duration_seconds: float,
+    computed: int,
+    total_features: int,
+    caveats: list[str],
+    indicators: list[dict[str, Any]],
+) -> NonTechnicalSummary:
+    min_duration = min(rainbow_duration_seconds, free_speech_duration_seconds)
+    coverage_percent = (computed / total_features * 100.0) if total_features > 0 else 0.0
+    notable_patterns = []
+    for item in indicators[:3]:
+        direction = (
+            "higher than typical reference"
+            if item["direction"] == "higher_than_reference"
+            else "lower than typical reference"
+        )
+        notable_patterns.append(
+            {
+                "label": _friendly_feature_name(str(item["feature"])),
+                "direction": direction,
+            }
+        )
+
+    return NonTechnicalSummary(
+        overall_result=_risk_plain_label(risk_level),
+        risk_level=risk_level,
+        score_percent=round(probability * 100.0, 1),
+        alert_level_percent=round(threshold * 100.0, 1),
+        threshold_mode=threshold_mode,
+        rainbow_duration_seconds=round(rainbow_duration_seconds, 1),
+        free_speech_duration_seconds=round(free_speech_duration_seconds, 1),
+        recording_length_quality=_duration_quality(min_duration),
+        usable_signals_computed=computed,
+        usable_signals_total=total_features,
+        data_quality_percent=round(coverage_percent, 1),
+        data_quality_band=_coverage_band(computed, total_features),
+        notable_voice_patterns=notable_patterns,
+        caveats=caveats,
+    )
 
 
 @app.on_event("startup")
@@ -141,6 +267,19 @@ async def analyze_phq(
             print(f"[ML-SERVICE] transcript_length={len(metadata_obj.transcript)}")
         print(f"[ML-SERVICE] processing_ms={processing_ms}")
         print("[ML-SERVICE] -----------------------------------------------")
+        non_technical_summary = _build_non_technical_summary(
+            risk_level=risk_level,
+            probability=probability,
+            threshold=threshold,
+            threshold_mode=metadata_obj.threshold_mode,
+            rainbow_duration_seconds=len(rainbow_signal) / rainbow_sr,
+            free_speech_duration_seconds=len(free_signal) / free_sr,
+            computed=computed,
+            total_features=total_features,
+            caveats=caveats,
+            indicators=indicators,
+        )
+        _print_non_technical_summary(request_id=request_id, summary=non_technical_summary)
 
         screening = ScreeningResult(
             probability=probability,
@@ -163,6 +302,7 @@ async def analyze_phq(
             feature_coverage={"total": total_features, "computed": computed, "missing": missing_features},
             processing_ms=processing_ms,
             caveats=caveats,
+            non_technical_summary=non_technical_summary,
         )
     except HTTPException:
         raise

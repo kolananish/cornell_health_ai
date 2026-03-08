@@ -126,6 +126,28 @@ export type VoiceFeatureCoverage = {
   missing: number;
 };
 
+export type NonTechnicalPattern = {
+  label: string;
+  direction: "higher than typical reference" | "lower than typical reference";
+};
+
+export type NonTechnicalSummary = {
+  overall_result: string;
+  risk_level: RiskLevel;
+  score_percent: number;
+  alert_level_percent: number;
+  threshold_mode: ThresholdMode;
+  rainbow_duration_seconds: number;
+  free_speech_duration_seconds: number;
+  recording_length_quality: "Good length" | "Somewhat short" | "Very short";
+  usable_signals_computed: number;
+  usable_signals_total: number;
+  data_quality_percent: number;
+  data_quality_band: "Excellent" | "Good" | "Fair" | "Limited" | "Unknown";
+  notable_voice_patterns: NonTechnicalPattern[];
+  caveats: string[];
+};
+
 export type VoiceAnalysisResult = {
   request_id: string;
   model_version: string;
@@ -139,6 +161,7 @@ export type VoiceAnalysisResult = {
   feature_coverage: VoiceFeatureCoverage;
   processing_ms: number;
   caveats: string[];
+  non_technical_summary: NonTechnicalSummary;
 };
 
 export interface AnalysisAdapter {

@@ -34,6 +34,28 @@ class VoiceIndicator(BaseModel):
     direction: Literal["higher_than_reference", "lower_than_reference"]
 
 
+class NonTechnicalPattern(BaseModel):
+    label: str
+    direction: Literal["higher than typical reference", "lower than typical reference"]
+
+
+class NonTechnicalSummary(BaseModel):
+    overall_result: str
+    risk_level: Literal["low", "medium", "high"]
+    score_percent: float
+    alert_level_percent: float
+    threshold_mode: ThresholdMode
+    rainbow_duration_seconds: float
+    free_speech_duration_seconds: float
+    recording_length_quality: Literal["Good length", "Somewhat short", "Very short"]
+    usable_signals_computed: int
+    usable_signals_total: int
+    data_quality_percent: float
+    data_quality_band: Literal["Excellent", "Good", "Fair", "Limited", "Unknown"]
+    notable_voice_patterns: list[NonTechnicalPattern]
+    caveats: list[str]
+
+
 class ScreeningResult(BaseModel):
     probability: float
     threshold: float
@@ -55,3 +77,4 @@ class AnalyzeResponse(BaseModel):
     feature_coverage: dict[str, int]
     processing_ms: int
     caveats: list[str]
+    non_technical_summary: NonTechnicalSummary
