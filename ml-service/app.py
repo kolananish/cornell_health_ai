@@ -15,6 +15,8 @@ from schemas import AnalyzeResponse, InferenceMetadata, NonTechnicalSummary, Scr
 
 app = FastAPI(title="VocalHealth AI v3 Model Service", version="1.0.0")
 model: LoadedModel | None = None
+# Runtime override requested by product tuning.
+BALANCED_THRESHOLD_OVERRIDE = 0.300
 
 
 def _risk_plain_label(risk_level: str) -> str:
@@ -59,6 +61,12 @@ def _friendly_feature_name(feature: str) -> str:
         "spectral_tilt": "voice spectral balance",
     }
     return names.get(feature, feature.replace("_", " "))
+
+
+def _runtime_thresholds(loaded_model: LoadedModel) -> tuple[float, float]:
+    threshold_high = float(loaded_model.thresholds.get("phq_mod_plus", 0.057))
+    threshold_balanced = BALANCED_THRESHOLD_OVERRIDE
+    return threshold_high, threshold_balanced
 
 
 def _print_non_technical_summary(
@@ -154,8 +162,9 @@ def startup_load_model() -> None:
     print(f"[ML-SERVICE] model_name={model.model_name}")
     print(f"[ML-SERVICE] model_hash={model.artifact_hash}")
     print(f"[ML-SERVICE] feature_count={len(model.feature_cols)} acoustic={len(model.acoustic_cols)} meta={len(model.meta_cols)}")
-    print(f"[ML-SERVICE] threshold_high_sensitivity={model.thresholds.get('phq_mod_plus', float('nan')):.3f}")
-    print(f"[ML-SERVICE] threshold_balanced={model.thresholds_balanced.get('phq_mod_plus', float('nan')):.3f}")
+    threshold_high, threshold_balanced = _runtime_thresholds(model)
+    print(f"[ML-SERVICE] threshold_high_sensitivity={threshold_high:.3f}")
+    print(f"[ML-SERVICE] threshold_balanced={threshold_balanced:.3f}")
     print(f"[ML-SERVICE] startup_ms={int((time.time() - start) * 1000)}")
     print("[ML-SERVICE] -----------------------------------------------")
 
@@ -165,13 +174,14 @@ def healthz() -> dict[str, Any]:
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
+    threshold_high, threshold_balanced = _runtime_thresholds(model)
     return {
         "status": "ok",
         "model_name": model.model_name,
         "model_hash": model.artifact_hash,
         "thresholds": {
-            "high_sensitivity": model.thresholds.get("phq_mod_plus"),
-            "balanced": model.thresholds_balanced.get("phq_mod_plus"),
+            "high_sensitivity": threshold_high,
+            "balanced": threshold_balanced,
         },
     }
 
@@ -232,8 +242,7 @@ async def analyze_phq(
         merged_features: dict[str, float] = {**acoustic_features, **metadata_features}
         probability, vector, computed = predict_probability(model, merged_features)
 
-        threshold_high = float(model.thresholds.get("phq_mod_plus", 0.057))
-        threshold_balanced = float(model.thresholds_balanced.get("phq_mod_plus", 0.091))
+        threshold_high, threshold_balanced = _runtime_thresholds(model)
         threshold = float(select_threshold(threshold_balanced, threshold_high, metadata_obj.threshold_mode))
 
         risk_level = derive_risk_level(probability, threshold_balanced, threshold_high)
