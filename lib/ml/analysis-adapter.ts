@@ -1,46 +1,55 @@
-import type { AnalysisAdapter, AudioAnalysisInput, AudioAnalysisResult } from "@/lib/types";
+import type { AnalysisAdapter, VoiceAnalysisInput, VoiceAnalysisResult } from "@/lib/types";
 
-export class MockAnalysisAdapter implements AnalysisAdapter {
-  async analyze(input: AudioAnalysisInput): Promise<AudioAnalysisResult> {
-    const prolonged = input.durationSeconds > 40;
-    const confidence = prolonged ? 0.84 : 0.71;
+function metadataToPayload(metadata: VoiceAnalysisInput["metadata"]): Record<string, number> {
+  const anyPsych =
+    metadata.sr_depression ||
+    metadata.sr_gad ||
+    metadata.sr_ptsd ||
+    metadata.sr_insomnia ||
+    metadata.sr_bipolar ||
+    metadata.sr_panic ||
+    metadata.sr_soc_anx_dis ||
+    metadata.sr_ocd;
 
-    return {
-      requestId: `mock-${Date.now()}`,
-      modelVersion: "mock",
-      summary: prolonged
-        ? "Patient provided detailed symptom context with moderate urgency indicators."
-        : "Patient provided concise visit context; no severe immediate concern inferred.",
-      riskFlags: prolonged ? ["Persistent symptom mention", "Follow-up recommended"] : ["Routine review"],
-      confidence,
-      recommendedFollowUp: prolonged
-        ? "Flag for provider review before consultation and confirm symptom timeline."
-        : "Share summary with provider and proceed with standard pre-visit workflow.",
-      targets: [],
-      aggregate: {
-        overallRisk: prolonged ? "medium" : "low",
-        strongestSignalTarget: "any_mod_plus",
-        caveats: ["Mock adapter in use"]
-      },
-      quality: {
-        observedAcousticCount: 0,
-        imputedAcousticCount: 0,
-        observedMetaCount: 0,
-        imputedMetaCount: 0,
-        confidenceModifier: 0
-      }
-    };
-  }
+  return {
+    age_num: metadata.age_num,
+    is_female: metadata.is_female ? 1 : 0,
+    edu_num: metadata.edu_num,
+    sr_depression: metadata.sr_depression ? 1 : 0,
+    sr_gad: metadata.sr_gad ? 1 : 0,
+    sr_ptsd: metadata.sr_ptsd ? 1 : 0,
+    sr_insomnia: metadata.sr_insomnia ? 1 : 0,
+    sr_bipolar: metadata.sr_bipolar ? 1 : 0,
+    sr_panic: metadata.sr_panic ? 1 : 0,
+    sr_soc_anx_dis: metadata.sr_soc_anx_dis ? 1 : 0,
+    sr_ocd: metadata.sr_ocd ? 1 : 0,
+    any_psych_sr: anyPsych ? 1 : 0
+  };
 }
 
 export class ApiModelAnalysisAdapter implements AnalysisAdapter {
-  async analyze(input: AudioAnalysisInput): Promise<AudioAnalysisResult> {
+  async analyze(input: VoiceAnalysisInput): Promise<VoiceAnalysisResult> {
+    const formData = new FormData();
+
+    formData.append("rainbow_audio", input.rainbowClip.blob, `rainbow.${input.rainbowClip.mimeType.includes("wav") ? "wav" : "bin"}`);
+    formData.append(
+      "free_speech_audio",
+      input.freeSpeechClip.blob,
+      `free-speech.${input.freeSpeechClip.mimeType.includes("wav") ? "wav" : "bin"}`
+    );
+
+    formData.append(
+      "metadata",
+      JSON.stringify({
+        ...metadataToPayload(input.metadata),
+        threshold_mode: input.thresholdMode ?? "balanced",
+        transcript: input.transcript ?? ""
+      })
+    );
+
     const response = await fetch("/api/model/analyze", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(input)
+      body: formData
     });
 
     if (!response.ok) {
@@ -49,14 +58,6 @@ export class ApiModelAnalysisAdapter implements AnalysisAdapter {
       throw new Error(message);
     }
 
-    return (await response.json()) as AudioAnalysisResult;
-  }
-}
-
-// Placeholder for future direct in-browser model implementation.
-export class ModelAnalysisAdapter implements AnalysisAdapter {
-  async analyze(input: AudioAnalysisInput): Promise<AudioAnalysisResult> {
-    void input;
-    throw new Error("Model adapter is not connected yet. Add your model implementation here.");
+    return (await response.json()) as VoiceAnalysisResult;
   }
 }

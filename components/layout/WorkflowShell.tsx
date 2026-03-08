@@ -1,10 +1,14 @@
 import type { PropsWithChildren } from "react";
 import { AppHeader } from "./AppHeader";
 
-export function WorkflowShell({ children }: PropsWithChildren) {
+type WorkflowShellProps = PropsWithChildren<{
+  hideHeader?: boolean;
+}>;
+
+export function WorkflowShell({ children, hideHeader = false }: WorkflowShellProps) {
   return (
     <div>
-      <AppHeader />
+      {hideHeader ? null : <AppHeader />}
       <main className="page-container">{children}</main>
     </div>
   );

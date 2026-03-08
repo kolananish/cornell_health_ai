@@ -1,145 +1,113 @@
 "use client";
 
-import { AlertCircle, Dot, Mic, MicOff } from "lucide-react";
+import { AlertCircle, Dot, Mic, MicOff, RotateCcw } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { WorkflowShell } from "@/components/layout/WorkflowShell";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
+import { audioBlobToWav } from "@/lib/audio/wav";
+import { demoModelMetadata } from "@/lib/demo-profile";
 import { ApiModelAnalysisAdapter } from "@/lib/ml/analysis-adapter";
-import { extractApproximateAcousticFeatures } from "@/lib/ml/audio-feature-extractor";
-import modelArtifact from "@/lib/ml/model-artifact.v2.json";
-import { getRecordings, saveRecording } from "@/lib/storage/indexeddb";
-import type { AudioAnalysisResult, FeatureMap, RecordingItem, RecordingStatus, RiskLevel } from "@/lib/types";
+import { saveVoiceRiskScreening } from "@/lib/ml/browser-storage";
+import type { RecordingStatus, VoiceClip, VoiceTask } from "@/lib/types";
 
-type RecordingWithUrl = RecordingItem & {
+type TaskConfig = {
+  id: VoiceTask;
+  title: string;
+  script: string;
+  instructions: string;
+};
+
+type ClipWithUrl = VoiceClip & {
   url: string;
+  createdAt: string;
 };
 
-type MetaInput = {
-  age_num: number;
-  is_female: boolean;
-  edu_num: number;
-  sr_depression: boolean;
-  sr_gad: boolean;
-  sr_ptsd: boolean;
-  sr_insomnia: boolean;
-  sr_bipolar: boolean;
-  sr_panic: boolean;
-  sr_soc_anx_dis: boolean;
-  sr_ocd: boolean;
-};
+const taskConfigs: TaskConfig[] = [
+  {
+    id: "rainbow",
+    title: "Task 1 - Rainbow Passage",
+    script:
+      "When the sunlight strikes raindrops in the air, they act as a prism and form a rainbow. The rainbow is a division of white light into many beautiful colors. These take the shape of a long round arch, with its path high above, and its two ends apparently beyond the horizon.",
+    instructions: "Read this passage aloud, twice in a row, at your normal speaking pace."
+  },
+  {
+    id: "free_speech",
+    title: "Task 2 - Counting Task",
+    script: "Count from 1 to 20 out loud, at your normal speaking pace.",
+    instructions:
+      "Speak each number clearly. Brief pauses between numbers are fine. Do not rush or slow down intentionally."
+  }
+];
 
 const analysisAdapter = new ApiModelAnalysisAdapter();
 
-const defaultMetaInput: MetaInput = {
-  age_num: 31,
-  is_female: false,
-  edu_num: 3,
-  sr_depression: false,
-  sr_gad: false,
-  sr_ptsd: false,
-  sr_insomnia: false,
-  sr_bipolar: false,
-  sr_panic: false,
-  sr_soc_anx_dis: false,
-  sr_ocd: false
-};
-
-function emptyAcousticFeatures(): FeatureMap {
-  return Object.fromEntries(modelArtifact.acoustic_cols.map((key) => [key, null]));
-}
-
-function toMetaFeatures(metaInput: MetaInput): FeatureMap {
-  const anyPsych =
-    metaInput.sr_depression ||
-    metaInput.sr_gad ||
-    metaInput.sr_ptsd ||
-    metaInput.sr_insomnia ||
-    metaInput.sr_bipolar ||
-    metaInput.sr_panic ||
-    metaInput.sr_soc_anx_dis ||
-    metaInput.sr_ocd;
-
-  return {
-    age_num: metaInput.age_num,
-    is_female: metaInput.is_female ? 1 : 0,
-    edu_num: metaInput.edu_num,
-    sr_depression: metaInput.sr_depression ? 1 : 0,
-    sr_gad: metaInput.sr_gad ? 1 : 0,
-    sr_ptsd: metaInput.sr_ptsd ? 1 : 0,
-    sr_insomnia: metaInput.sr_insomnia ? 1 : 0,
-    sr_bipolar: metaInput.sr_bipolar ? 1 : 0,
-    sr_panic: metaInput.sr_panic ? 1 : 0,
-    sr_soc_anx_dis: metaInput.sr_soc_anx_dis ? 1 : 0,
-    sr_ocd: metaInput.sr_ocd ? 1 : 0,
-    any_psych_sr: anyPsych ? 1 : 0
-  };
-}
-
-function riskBadgeClass(risk: RiskLevel): string {
-  if (risk === "high") return "bg-[#ffe7ea] text-[#ae2936]";
-  if (risk === "medium") return "bg-[#fff4dd] text-[#975f00]";
-  return "bg-[#e8f8ef] text-[#1d7a46]";
+function formatDuration(seconds: number): string {
+  const min = Math.floor(seconds / 60)
+    .toString()
+    .padStart(2, "0");
+  const sec = Math.max(0, seconds % 60)
+    .toString()
+    .padStart(2, "0");
+  return `${min}:${sec}`;
 }
 
 export function VoiceRecordingScreen() {
   const router = useRouter();
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const objectUrlsRef = useRef<string[]>([]);
   const chunksRef = useRef<Blob[]>([]);
   const startedAtRef = useRef<number | null>(null);
   const timerRef = useRef<number | null>(null);
+  const clipsRef = useRef<Partial<Record<VoiceTask, ClipWithUrl>>>({});
 
   const [status, setStatus] = useState<RecordingStatus>("ready");
-  const [error, setError] = useState<string>("");
+  const [activeTask, setActiveTask] = useState<VoiceTask | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [contextNote, setContextNote] = useState("");
-  const [metaInput, setMetaInput] = useState<MetaInput>(defaultMetaInput);
-  const [recordings, setRecordings] = useState<RecordingWithUrl[]>([]);
-  const [analyses, setAnalyses] = useState<Record<string, AudioAnalysisResult>>({});
+  const [clips, setClips] = useState<Partial<Record<VoiceTask, ClipWithUrl>>>({});
+  const [optedIn, setOptedIn] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    const hydrate = async () => {
-      try {
-        const stored = await getRecordings();
-        const withUrls = stored.map((recording) => ({
-          ...recording,
-          url: URL.createObjectURL(recording.blob)
-        }));
-        objectUrlsRef.current = withUrls.map((recording) => recording.url);
-        setRecordings(withUrls);
-      } catch {
-        setError("Unable to load previous recordings in this browser.");
-      }
-    };
+    clipsRef.current = clips;
+  }, [clips]);
 
-    hydrate();
-
+  useEffect(() => {
     return () => {
-      objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-      stopMediaStream();
-      clearTimer();
+      Object.values(clipsRef.current).forEach((clip) => {
+        if (clip) {
+          URL.revokeObjectURL(clip.url);
+        }
+      });
+
+      if (timerRef.current) {
+        window.clearInterval(timerRef.current);
+      }
+
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+      }
     };
   }, []);
 
-  const clearTimer = () => {
-    if (timerRef.current) {
-      window.clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-  };
+  const allRequiredTasksReady = useMemo(() => Boolean(clips.rainbow && clips.free_speech), [clips]);
 
-  const stopMediaStream = () => {
-    if (!streamRef.current) return;
-    streamRef.current.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-  };
+  const statusLabel =
+    status === "recording"
+      ? `Recording ${activeTask ? `(${activeTask === "rainbow" ? "Rainbow Passage" : "Counting Task"})` : ""}`
+      : status === "processing"
+        ? "Submitting"
+        : status === "error"
+          ? "Attention needed"
+          : "Ready";
 
-  const startRecording = async () => {
+  const startRecording = async (task: VoiceTask) => {
     setError("");
+
+    if (status === "recording" || status === "processing") {
+      setError("A recording is already in progress.");
+      return;
+    }
 
     if (!("mediaDevices" in navigator) || !("MediaRecorder" in window)) {
       setStatus("error");
@@ -156,6 +124,7 @@ export function VoiceRecordingScreen() {
       chunksRef.current = [];
       startedAtRef.current = Date.now();
       setElapsedSeconds(0);
+      setActiveTask(task);
       setStatus("recording");
 
       timerRef.current = window.setInterval(() => {
@@ -171,64 +140,50 @@ export function VoiceRecordingScreen() {
       };
 
       recorder.onstop = async () => {
-        clearTimer();
-        setStatus("processing");
+        if (timerRef.current) {
+          window.clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
 
-        const mimeType = recorder.mimeType || "audio/webm";
-        const blob = new Blob(chunksRef.current, { type: mimeType });
-        const durationSeconds = startedAtRef.current ? Math.max(1, Math.floor((Date.now() - startedAtRef.current) / 1000)) : 1;
-
-        const recording: RecordingItem = {
-          id: `rec-${Date.now()}`,
-          createdAt: new Date().toISOString(),
-          durationSeconds,
-          blob,
-          mimeType
-        };
+        const rawMimeType = recorder.mimeType || "audio/webm";
+        const rawBlob = new Blob(chunksRef.current, { type: rawMimeType });
+        const clipDurationSeconds = startedAtRef.current ? Math.max(1, Math.floor((Date.now() - startedAtRef.current) / 1000)) : 1;
 
         try {
-          await saveRecording(recording);
-          const url = URL.createObjectURL(blob);
-          objectUrlsRef.current.unshift(url);
-          const withUrl = { ...recording, url };
-          setRecordings((prev) => [withUrl, ...prev]);
+          const converted = await audioBlobToWav(rawBlob);
+          const wavDuration = Math.max(1, Math.floor(converted.durationSeconds));
+          const url = URL.createObjectURL(converted.wavBlob);
 
-          let extracted = {
-            sampleRateHz: 16000,
-            durationSeconds,
-            acousticFeatures: emptyAcousticFeatures()
-          };
+          setClips((prev) => {
+            const previous = prev[task];
+            if (previous) {
+              URL.revokeObjectURL(previous.url);
+            }
 
-          try {
-            const computed = await extractApproximateAcousticFeatures(blob);
-            extracted = {
-              sampleRateHz: computed.sampleRateHz,
-              durationSeconds: Math.max(durationSeconds, Math.floor(computed.durationSeconds)),
-              acousticFeatures: computed.acousticFeatures
+            return {
+              ...prev,
+              [task]: {
+                blob: converted.wavBlob,
+                durationSeconds: Math.max(clipDurationSeconds, wavDuration),
+                mimeType: "audio/wav",
+                url,
+                createdAt: new Date().toISOString()
+              }
             };
-          } catch {
-            // Use imputer-friendly null values if extraction fails.
-          }
-
-          const analysis = await analysisAdapter.analyze({
-            recordingId: recording.id,
-            durationSeconds: extracted.durationSeconds,
-            sampleRateHz: extracted.sampleRateHz,
-            acousticFeatures: extracted.acousticFeatures,
-            metaFeatures: toMetaFeatures(metaInput),
-            transcript: contextNote
           });
 
-          setAnalyses((prev) => ({ ...prev, [recording.id]: analysis }));
-          setStatus("stopped");
-          setElapsedSeconds(durationSeconds);
-        } catch (analysisError) {
+          setStatus("ready");
+        } catch {
           setStatus("error");
-          setError(analysisError instanceof Error ? analysisError.message : "Recording saved, but model analysis failed.");
+          setError("Failed to convert recording to WAV for model processing.");
         } finally {
           startedAtRef.current = null;
           chunksRef.current = [];
-          stopMediaStream();
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach((track) => track.stop());
+            streamRef.current = null;
+          }
+          setActiveTask(null);
         }
       };
 
@@ -245,134 +200,100 @@ export function VoiceRecordingScreen() {
     recorder.stop();
   };
 
-  const formatDuration = (seconds: number) => {
-    const min = Math.floor(seconds / 60)
-      .toString()
-      .padStart(2, "0");
-    const sec = (seconds % 60).toString().padStart(2, "0");
-    return `${min}:${sec}`;
-  };
+  const submitForAnalysis = async () => {
+    setError("");
 
-  const statusLabel =
-    status === "recording"
-      ? "Recording"
-      : status === "processing"
-        ? "Analyzing"
-        : status === "stopped"
-          ? "Saved + analyzed"
-          : status === "error"
-            ? "Attention needed"
-            : "Ready to record";
+    if (!optedIn) {
+      setError("Please check the opt-in box before submitting your recordings.");
+      return;
+    }
 
-  const setMetaBoolean = (key: keyof MetaInput, value: boolean) => {
-    setMetaInput((prev) => ({ ...prev, [key]: value }));
+    if (!clips.rainbow || !clips.free_speech) {
+      setError("Please record both tasks before submitting.");
+      return;
+    }
+
+    setStatus("processing");
+    const payload = {
+      rainbowClip: clips.rainbow,
+      freeSpeechClip: clips.free_speech,
+      metadata: demoModelMetadata
+    };
+
+    void analysisAdapter
+      .analyze(payload)
+      .then((result) => {
+        saveVoiceRiskScreening(result);
+      })
+      .catch((analysisError) => {
+        console.error("[voice-analysis] background analysis failed", analysisError);
+      });
+
+    router.push("/review");
   };
 
   return (
     <WorkflowShell>
-      <section className="mx-auto w-full max-w-[780px]">
-        <h1 className="title-serif text-[48px] font-bold leading-[1.08] text-[#3f327d]">Voice recording</h1>
-        <p className="mt-3 max-w-[850px] text-[16px] leading-[1.45] text-[#3d3f47]">
-          Use the microphone below to share any additional context with your care team. This is optional but can help
-          your provider prepare for your visit.
-        </p>
-
-        <p className="mt-5 text-[14px] font-semibold text-[#656775]">Step 2 of 3</p>
-
-        <div className="mt-5 rounded-2xl border border-[#d7d8e0] bg-white p-6 shadow-card">
-          <h2 className="title-serif text-[38px] font-bold text-[#3f327d]">Voice Recording</h2>
-          <p className="mt-2 text-[16px] leading-[1.45] text-[#4c4e5a]">
-            Describe your symptoms, concerns, or anything else you&apos;d like your care team to know. Detailed output is
-            logged to the terminal for reviewer visibility.
+      <section className="mx-auto w-full max-w-[760px]">
+        <div className="rounded-2xl border border-[#d7d8e0] bg-white p-6 shadow-card">
+          <p className="text-[15px] leading-[1.5] text-[#3d3f47]">
+            Your physician is recommending you complete this vocal analysis as a pre-screening for your visit. If you would like
+            to opt-in, please hit the checkmark and record your audio.
           </p>
+          <label className="mt-4 inline-flex items-center gap-2 text-[14px] font-medium text-[#31333a]">
+            <input type="checkbox" checked={optedIn} onChange={(event) => setOptedIn(event.target.checked)} />
+            I opt in to complete this vocal analysis.
+          </label>
+
+          <div className="mt-5 rounded-xl bg-[#f3f4f9] px-4 py-3 text-[13px] text-[#535564]">
+            <p className="font-semibold">Setup (both tasks)</p>
+            <ul className="mt-2 list-disc space-y-1 pl-5">
+              <li>Quiet room, no background noise</li>
+              <li>Microphone ~30 cm (12 inches) from your mouth</li>
+              <li>Wait 1 second after pressing Record before speaking</li>
+              <li>Normal speaking volume - not too loud, not too quiet</li>
+            </ul>
+          </div>
 
           <div className="mt-5 inline-flex items-center rounded-full bg-[#f2f2f8] px-4 py-2 text-[14px] font-semibold text-[#626476]">
-            <Dot size={24} className={status === "recording" ? "animate-pulse text-red-500" : "text-[#8f90a0]"} />
+            <Dot size={20} className={status === "recording" ? "animate-pulse text-red-500" : "text-[#8f90a0]"} />
             {statusLabel}
-            {status === "recording" ? ` • ${formatDuration(elapsedSeconds)}` : ""}
+            {status === "recording" ? ` | ${formatDuration(elapsedSeconds)}` : ""}
           </div>
 
-          <div className="mt-5 flex flex-wrap gap-3">
-            <Button size="lg" onClick={startRecording} disabled={status === "recording" || status === "processing"}>
-              <Mic className="mr-2" size={16} />
-              Start recording
-            </Button>
-            <Button
-              variant="secondary"
-              size="lg"
-              onClick={stopRecording}
-              disabled={status !== "recording"}
-              className="bg-[#ece9ff] text-[#4b3bdd]"
-            >
-              <MicOff className="mr-2" size={16} />
-              Stop recording
-            </Button>
-          </div>
+          <div className="mt-5 space-y-4">
+            {taskConfigs.map((task) => {
+              const clip = clips[task.id];
+              const isActive = activeTask === task.id;
 
-          <div className="mt-5 grid gap-4 md:grid-cols-2">
-            <div>
-              <p className="field-label">Age</p>
-              <Input
-                type="number"
-                min={16}
-                max={95}
-                value={metaInput.age_num}
-                onChange={(event) => setMetaInput((prev) => ({ ...prev, age_num: Number(event.target.value) || 0 }))}
-              />
-            </div>
-            <div>
-              <p className="field-label">Education level (1-5)</p>
-              <Input
-                type="number"
-                min={1}
-                max={5}
-                value={metaInput.edu_num}
-                onChange={(event) => setMetaInput((prev) => ({ ...prev, edu_num: Number(event.target.value) || 0 }))}
-              />
-            </div>
-            <label className="inline-flex items-center gap-2 text-[14px] text-[#373944]">
-              <input
-                type="checkbox"
-                checked={metaInput.is_female}
-                onChange={(event) => setMetaBoolean("is_female", event.target.checked)}
-              />
-              Female (binary field used by this model version)
-            </label>
-          </div>
+              return (
+                <article key={task.id} className="rounded-xl border border-[#e1e2ea] bg-[#fafaff] p-4">
+                  <p className="text-[16px] font-semibold text-[#333541]">{task.title}</p>
+                  <p className="mt-2 text-[14px] leading-[1.5] text-[#4c4e5a]">&ldquo;{task.script}&rdquo;</p>
+                  <p className="mt-2 text-[14px] leading-[1.5] text-[#4c4e5a]">{task.instructions}</p>
 
-          <div className="mt-4">
-            <p className="field-label">Self-reported mental health history used by model</p>
-            <div className="grid gap-2 md:grid-cols-2">
-              {[
-                ["sr_depression", "Depression"],
-                ["sr_gad", "Generalized anxiety"],
-                ["sr_ptsd", "PTSD"],
-                ["sr_insomnia", "Insomnia"],
-                ["sr_bipolar", "Bipolar"],
-                ["sr_panic", "Panic disorder"],
-                ["sr_soc_anx_dis", "Social anxiety"],
-                ["sr_ocd", "OCD"]
-              ].map(([key, label]) => (
-                <label key={key} className="inline-flex items-center gap-2 text-[14px] text-[#373944]">
-                  <input
-                    type="checkbox"
-                    checked={metaInput[key as keyof MetaInput] as boolean}
-                    onChange={(event) => setMetaBoolean(key as keyof MetaInput, event.target.checked)}
-                  />
-                  {label}
-                </label>
-              ))}
-            </div>
-          </div>
+                  <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <Button size="sm" onClick={() => startRecording(task.id)} disabled={status === "recording" || status === "processing"}>
+                      {clip ? <RotateCcw size={15} className="mr-2" /> : <Mic size={15} className="mr-2" />}
+                      {clip ? "Retry recording" : "Record"}
+                    </Button>
+                    {isActive ? (
+                      <Button variant="secondary" size="sm" onClick={stopRecording}>
+                        <MicOff size={15} className="mr-2" />
+                        Stop
+                      </Button>
+                    ) : null}
+                    {clip ? <span className="text-[12px] font-semibold text-[#606271]">Saved | {formatDuration(clip.durationSeconds)}</span> : null}
+                  </div>
 
-          <div className="mt-5">
-            <p className="field-label">Optional context notes</p>
-            <Textarea
-              value={contextNote}
-              onChange={(event) => setContextNote(event.target.value)}
-              placeholder="Example: chest tightness after climbing stairs, started 2 weeks ago"
-              className="min-h-[92px]"
-            />
+                  {clip ? (
+                    <audio controls className="mt-3 w-full">
+                      <source src={clip.url} type={clip.mimeType} />
+                    </audio>
+                  ) : null}
+                </article>
+              );
+            })}
           </div>
 
           {error ? (
@@ -381,53 +302,12 @@ export function VoiceRecordingScreen() {
               {error}
             </div>
           ) : null}
-        </div>
 
-        <div className="mt-5 space-y-3">
-          {recordings.map((recording) => {
-            const analysis = analyses[recording.id];
-            return (
-              <article key={recording.id} className="rounded-xl border border-[#d7d8e0] bg-white p-4 shadow-card">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-[15px] font-semibold text-[#343640]">
-                    Recording from {new Date(recording.createdAt).toLocaleString()} ({formatDuration(recording.durationSeconds)})
-                  </p>
-                  <span className="rounded-full bg-[#ece9ff] px-3 py-1 text-[12px] font-semibold text-[#4b3bdd]">Stored locally</span>
-                </div>
-                <audio controls className="w-full">
-                  <source src={recording.url} type={recording.mimeType} />
-                </audio>
-
-                {analysis ? (
-                  <div className="mt-3 rounded-lg border border-[#e2e3ea] bg-[#fafaff] p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-[13px] font-semibold text-[#4b3bdd]">Model summary</p>
-                      <span className={`rounded-full px-3 py-1 text-[12px] font-semibold ${riskBadgeClass(analysis.aggregate.overallRisk)}`}>
-                        {analysis.aggregate.overallRisk.toUpperCase()} RISK
-                      </span>
-                    </div>
-                    <p className="mt-1 text-[14px] text-[#3d3f47]">{analysis.summary}</p>
-                    <p className="mt-1 text-[13px] text-[#5a5c67]">Confidence: {(analysis.confidence * 100).toFixed(1)}%</p>
-
-                    <div className="mt-2 space-y-1">
-                      {analysis.targets.map((target) => (
-                        <p key={target.name} className="text-[13px] text-[#444654]">
-                          {target.name}: {(target.probability * 100).toFixed(1)}% ({target.riskLevel})
-                        </p>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-              </article>
-            );
-          })}
-        </div>
-
-        <div className="mt-8 flex justify-end gap-3">
-          <Button variant="secondary" size="lg" onClick={() => router.push("/medical-history")}>
-            Back
-          </Button>
-          <Button size="lg" onClick={() => router.push("/review")}>Next</Button>
+          <div className="mt-6 flex justify-end">
+            <Button size="lg" onClick={submitForAnalysis} disabled={!optedIn || !allRequiredTasksReady || status === "processing" || status === "recording"}>
+              Submit
+            </Button>
+          </div>
         </div>
       </section>
     </WorkflowShell>

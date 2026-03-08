@@ -71,61 +71,76 @@ export type RecordingItem = {
 
 export type RiskLevel = "low" | "medium" | "high";
 
-export type FeatureMap = Record<string, number | null>;
+export type ThresholdMode = "balanced" | "high_sensitivity";
 
-export type AudioAnalysisInput = {
-  recordingId: string;
+export type VoiceTask = "rainbow" | "free_speech";
+
+export type VoiceMetadata = {
+  age_num: number;
+  is_female: boolean;
+  edu_num: number;
+  sr_depression: boolean;
+  sr_gad: boolean;
+  sr_ptsd: boolean;
+  sr_insomnia: boolean;
+  sr_bipolar: boolean;
+  sr_panic: boolean;
+  sr_soc_anx_dis: boolean;
+  sr_ocd: boolean;
+};
+
+export type VoiceClip = {
+  blob: Blob;
   durationSeconds: number;
-  sampleRateHz: number;
-  acousticFeatures: FeatureMap;
-  metaFeatures: FeatureMap;
+  mimeType: string;
+};
+
+export type VoiceAnalysisInput = {
+  rainbowClip: VoiceClip;
+  freeSpeechClip: VoiceClip;
+  metadata: VoiceMetadata;
   transcript?: string;
+  thresholdMode?: ThresholdMode;
 };
 
-export type FeatureContribution = {
+export type VoiceIndicator = {
   feature: string;
-  contribution: number;
-  normalizedValue: number;
-  rawValue: number;
+  value: number;
+  z_score: number;
+  direction: "higher_than_reference" | "lower_than_reference";
 };
 
-export type ModelTargetResult = {
-  name: string;
+export type VoiceModelTarget = {
   probability: number;
   threshold: number;
-  thresholdBalanced: number;
-  riskLevel: RiskLevel;
-  margin: number;
-  topPositiveContributors: FeatureContribution[];
-  topNegativeContributors: FeatureContribution[];
+  threshold_balanced: number;
+  threshold_high_sensitivity: number;
+  threshold_mode: ThresholdMode;
+  flag: boolean;
+  auc?: number;
 };
 
-export type ModelQuality = {
-  observedAcousticCount: number;
-  imputedAcousticCount: number;
-  observedMetaCount: number;
-  imputedMetaCount: number;
-  confidenceModifier: number;
+export type VoiceFeatureCoverage = {
+  total: number;
+  computed: number;
+  missing: number;
 };
 
-export type ModelAggregateResult = {
-  overallRisk: RiskLevel;
-  strongestSignalTarget: string;
+export type VoiceAnalysisResult = {
+  request_id: string;
+  model_version: string;
+  screening: {
+    phq_mod_plus: VoiceModelTarget;
+  };
+  risk_level: RiskLevel;
+  top_voice_indicators: VoiceIndicator[];
+  suggested_action: string;
+  n_features_computed: number;
+  feature_coverage: VoiceFeatureCoverage;
+  processing_ms: number;
   caveats: string[];
 };
 
-export type AudioAnalysisResult = {
-  requestId: string;
-  modelVersion: string;
-  summary: string;
-  riskFlags: string[];
-  confidence: number;
-  recommendedFollowUp: string;
-  targets: ModelTargetResult[];
-  aggregate: ModelAggregateResult;
-  quality: ModelQuality;
-};
-
 export interface AnalysisAdapter {
-  analyze(input: AudioAnalysisInput): Promise<AudioAnalysisResult>;
+  analyze(input: VoiceAnalysisInput): Promise<VoiceAnalysisResult>;
 }

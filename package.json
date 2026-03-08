@@ -3,17 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "rm -rf .next && NEXT_DISABLE_WEBPACK_CACHE=1 concurrently -n NEXT,ML -c blue,magenta \"next dev -H 127.0.0.1 -p 3000\" \"npm run dev:ml\"",
+    "dev:ml": "bash ./ml-service/run-dev.sh",
+    "setup:ml": "python3.12 -m venv ml-service/.venv && ml-service/.venv/bin/pip install -r ml-service/requirements.txt && ml-service/.venv/bin/python ml-service/resolve_runtime.py --pip-bin ml-service/.venv/bin/pip --root-dir . --model-path deliverables/psych_screener_v3.joblib",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
-    "model:export": "python3 scripts/export_psych_model.py --joblib psych_screener_v2.joblib --metadata psych_screener_v2_metadata.json --output lib/ml/model-artifact.v2.json"
+    "lint": "next lint"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.460.0",
-    "meyda": "^5.6.3",
     "next": "14.2.20",
     "react": "18.3.1",
     "react-dom": "18.3.1",
@@ -25,6 +25,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "autoprefixer": "^10.4.20",
+    "concurrently": "^9.2.1",
     "eslint": "^8.57.1",
     "eslint-config-next": "14.2.20",
     "postcss": "^8.4.47",
